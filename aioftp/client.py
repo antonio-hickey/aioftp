@@ -135,20 +135,34 @@ class BaseClient:
         self._passive_commands = passive_commands
         self._open_connection = partial(open_connection, ssl=self.ssl,
                                         **siosocks_asyncio_kwargs)
+        self._stream_reader = None
+        self._stream_writer = None
 
     async def connect(self, host, port=DEFAULT_PORT):
+        
+        # Store if user wants ssl
+        _ssl_temp = self.ssl
+        
+        # Temporarily disable ssl
+        self.ssl = False
+        
         self.server_host = host
         self.server_port = port
         reader, writer = await asyncio.wait_for(
             self._open_connection(host, port),
             self.connection_timeout,
         )
+        self._stream_reader = reader
+        self._stream_writer = writer
         self.stream = ThrottleStreamIO(
             reader,
             writer,
             throttles={"_": self.throttle},
             timeout=self.socket_timeout,
         )
+        
+        # Switch ssl back to user provided variable
+        self.ssl = _ssl_temp
 
     def close(self):
         """
@@ -646,6 +660,17 @@ class Client(BaseClient):
 
         :raises aioftp.StatusCodeError: if unknown code received
         """
+        
+        # TODO: Need to catch explicit TLS connection
+        
+        code, info = await self.command("AUTH SSL", ("234"))
+        if code == "234":
+            await self._stream_writer.loop.start_tls(
+                self._stream_writer.transport, 
+                self._stream_writer._protocol, 
+                self.ssl,
+            )
+            
         code, info = await self.command("USER " + user, ("230", "33x"))
         while code.matches("33x"):
             censor_after = None
